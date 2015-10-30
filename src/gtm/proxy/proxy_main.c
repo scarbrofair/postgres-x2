@@ -1270,7 +1270,7 @@ GTMProxy_ThreadMain(void *argp)
 			{
 				saved_seqno = thrinfo->thr_seqno;
 
-				while (thrinfo->thr_conn_count <= 0)
+				while (thrinfo->copy_new_conns)
 				{
 					/*
 					 * No connections assigned to the thread. Wait for at least one
