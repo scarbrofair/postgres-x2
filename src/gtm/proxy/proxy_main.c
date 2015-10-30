@@ -1288,7 +1288,7 @@ GTMProxy_ThreadMain(void *argp)
 						workerThreadReconnectToGTM();
 					}
 				}
-				if (gtm_list_length(thrinfo->thr_new_conns) > 0)
+				if (gtm_list_length(thrinfo->thr_new_conns) > 0 && !(thrinfo->copy_new_conns))
 				{
 					thrinfo->thr_pri_new_conns = gtm_list_concat(thrinfo->thr_pri_new_conns,
 															gtm_list_copy(thrinfo->thr_new_conns));
