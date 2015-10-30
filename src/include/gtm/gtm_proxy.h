@@ -49,6 +49,7 @@ typedef struct GTMProxy_ConnectionInfo
 	GTM_MessageType			con_pending_msg;
 	GlobalTransactionId 		con_txid;
 	GTM_TransactionHandle		con_handle;
+	struct GTMProxy_ConnectionInfo *next;
 } GTMProxy_ConnectionInfo;
 
 typedef struct GTMProxy_Connections
@@ -108,11 +109,13 @@ typedef struct GTMProxy_ThreadInfo
 	int32					thr_seqno;
 
 	/* connection array */
-	GTMProxy_ConnectionInfo	*thr_all_conns[GTM_PROXY_MAX_CONNECTIONS];
-	struct pollfd			thr_poll_fds[GTM_PROXY_MAX_CONNECTIONS];
-
+	GTMProxy_ConnectionInfo	thr_all_conns[GTM_PROXY_MAX_CONNECTIONS];
+	GTMProxy_ConnectionInfo					*cur_free_conn_head;
+	int						thr_epoll_fd;
+	//struct pollfd			thr_poll_fds[GTM_PROXY_MAX_CONNECTIONS];
+    GTM_ConnHashBucket		GTM_ConnHTable[GTM_PROXY_MAX_CONNECTIONS];
 	/* map info from ConnectionInfo->con_id to array index of thr_all_conns */
-	int16					thr_conid2idx[GTM_PROXY_MAX_CONNECTIONS];
+	//int16					thr_conid2idx[GTM_PROXY_MAX_CONNECTIONS];
 
 	/* Command backup */
 	short					thr_any_backup[GTM_PROXY_MAX_CONNECTIONS];
@@ -121,9 +124,13 @@ typedef struct GTMProxy_ThreadInfo
 
 	gtm_List 					*thr_processed_commands;
 	gtm_List 					*thr_pending_commands[MSG_TYPE_COUNT];
-
+	/* New conns, belong to my memcontext*/
+	gtm_List					*thr_pri_new_conns;
+	/* New conns, but belong to the master thread memcontext*/
+	gtm_List 					*thr_new_conns; 
 	GTM_Conn				*thr_gtm_conn;		/* Connection to GTM */
-
+	/* Did the thread copy the new conns to its own list?*/
+	bool					copy_new_conns;
 	/* Reconnect Info */
 	int						can_accept_SIGUSR2;
 	int						reconnect_issued;

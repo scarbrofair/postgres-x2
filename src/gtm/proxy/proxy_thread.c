@@ -132,7 +132,8 @@ GTMProxy_ThreadInfo *
 GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx)
 {
 	GTMProxy_ThreadInfo *thrinfo;
-	int err;
+	int err, i;
+
 
 	/*
 	 * We are still running in the context of the main thread. So the
@@ -140,7 +141,6 @@ GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx)
 	 * memory is explicitely freed.
 	 */
 	thrinfo = (GTMProxy_ThreadInfo *)palloc0(sizeof (GTMProxy_ThreadInfo));
-
 	GTM_MutexLockInit(&thrinfo->thr_lock);
 	GTM_CVInit(&thrinfo->thr_cv);
 
@@ -158,6 +158,14 @@ GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx)
 	 */
 	thrinfo->thr_status = GTM_PROXY_THREAD_STARTING;
 
+	thrinfo->cur_free_conn_head = NULL;
+	for (i = 0; i < (GTM_PROXY_MAX_CONNECTIONS-1); i++) {
+		thrinfo->thr_all_conns[i].next = &(thrinfo->thr_all_conns[i+1]);
+	}
+	(thrinfo->thr_all_conns[GTM_PROXY_MAX_CONNECTIONS-1]).next = NULL;
+	thrinfo->thr_new_conns = NULL;
+	thrinfo->thr_pri_new_conns = NULL;
+	thrinfo->copy_new_conns = false;
 	/*
 	 * Install the ThreadInfo structure in the global array. We do this before
 	 * starting the thread
@@ -332,7 +340,7 @@ GTMProxy_ThreadMainWrapper(void *argp)
  * which will be serving this connection
  */
 GTMProxy_ThreadInfo *
-GTMProxy_ThreadAddConnection(GTMProxy_ConnectionInfo *conninfo)
+GTMProxy_ThreadAddConnection(Port *port)
 {
 	int con_id = -1, con_idx = 0;
 	GTMProxy_ThreadInfo *thrinfo = NULL;
@@ -369,18 +377,24 @@ GTMProxy_ThreadAddConnection(GTMProxy_ConnectionInfo *conninfo)
 	if (thrinfo->thr_conn_count >= GTM_PROXY_MAX_CONNECTIONS)
 	{
 		GTM_MutexLockRelease(&thrinfo->thr_lock);
-		elog(ERROR, "Too many connections");
+		elog(WARNING, "Too many connections");
 	}
-
+	if (thrinfo->copy_new_conns) {
+		// have been copied by the thread, so clear this list
+		gtm_list_free(thrinfo->thr_new_conns);
+		thrinfo->thr_new_conns  = NULL;
+		thrinfo->copy_new_conns = false;
+	} 
+	thrinfo->thr_new_conns =  gtm_lappend(thrinfo->thr_new_conns, port);
 	/* Find unassigned connection id in this worker thread. */
-	for (con_id = 0; con_id < GTM_PROXY_MAX_CONNECTIONS; con_id++)
+	/*for (con_id = 0; con_id < GTM_PROXY_MAX_CONNECTIONS; con_id++)
 		if (thrinfo->thr_conid2idx[con_id] == -1)
 			break;
 
 	if (con_id >= GTM_PROXY_MAX_CONNECTIONS) {
 		GTM_MutexLockRelease(&thrinfo->thr_lock);
 		elog(ERROR, "Unassigned connection id not found.");
-	}
+	}*/
 
 	/*
 	 * Save the array slotid in the conninfo structure. We send this to the GTM
@@ -388,12 +402,13 @@ GTMProxy_ThreadAddConnection(GTMProxy_ConnectionInfo *conninfo)
 	 * response. We use that information to route the response back to the
 	 * approrpiate connection
 	 */
+	/*
 	con_idx = thrinfo->thr_conn_count++;
 	conninfo->con_id = con_id;
 	thrinfo->thr_conid2idx[con_id] = con_idx;
 	thrinfo->thr_all_conns[con_idx] = conninfo;
 	elog(DEBUG5, "Assigned a connection id to new connection: id = %d, index = %d", con_id, con_idx);
-
+	*/
 	/*
 	 * Now increment the seqno since a new connection is added to the array.
 	 * Before we do the next poll(), the fd array will be forced to be

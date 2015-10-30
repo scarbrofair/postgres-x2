@@ -17,7 +17,8 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/socket.h>
-#include <sys/select.h>
+//#include <sys/select.h>
+#include <sys/epoll.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -120,6 +121,10 @@ pthread_key_t	threadinfo_key;
 static bool		GTMProxyAbortPending = false;
 static GTM_Conn *master_conn;
 
+typedef struct GTM_ConnHashBucket
+{
+	gtm_List        *nhb_list;
+} GTM_ConnHashBucket;
 
 /*
  * External Routines
@@ -187,6 +192,13 @@ static void UnregisterProxy(void);
 static GTM_Conn *ConnectGTM(void);
 static void ReleaseCmdBackup(GTMProxy_CommandInfo *cmdinfo);
 static void workerThreadReconnectToGTM(void);
+static GTMProxy_ConnectionInfo *pgxc_find_conn(GTM_ConnHashBucket *HTable,
+												int socket);
+static int pgxc_remove_conn(GTM_ConnHashBucket *HTable,
+							GTMProxy_ConnectionInfo *conninfo);
+static int pgxc_add_conn(GTM_ConnHashBucket *HTable,
+							GTMProxy_ConnectionInfo *conninfo)
+
 
 /*
  * One-time initialization. It's called immediately after the main process
@@ -1098,7 +1110,8 @@ GTMProxy_ThreadMain(void *argp)
 	char gtm_connect_string[1024];
 	int	first_turn = TRUE;	/* Used only to set longjmp target at the first turn of thread loop */
 	GTMProxy_CommandData cmd_data = {};
-
+	struct epoll_event event_cell, event_set[GTM_PROXY_MAX_CONNECTIONS];
+    //GTM_ConnHashBucket GTM_ConnHTable[GTM_PROXY_MAX_CONNECTIONS];
 	elog(DEBUG3, "Starting the connection helper thread");
 
 	/*
@@ -1127,6 +1140,11 @@ GTMProxy_ThreadMain(void *argp)
 	if (thrinfo->thr_gtm_conn == NULL)
 		elog(FATAL, "GTM connection failed");
 
+	thrinfo->thr_epoll_fd = epoll_create(GTM_PROXY_MAX_CONNECTIONS);
+
+	if (thrinfo->epoll_fd == -1)
+		elog(FATAL, "GTM failed to create epoll fd");
+
 	/*
 	 * Get the input_message in the TopMemoryContext so that we don't need to
 	 * free/palloc it for every incoming message. Unlike Postgres, we don't
@@ -1144,6 +1162,7 @@ GTMProxy_ThreadMain(void *argp)
 	{
 		thrinfo->thr_any_backup[ii] = FALSE;
 		thrinfo->thr_qtype[ii] = 0;
+		thrinfo->thr_all_conns[ii].con_id = ii;
 		initStringInfo(&(thrinfo->thr_inBufData[ii]));
 	}
 
@@ -1181,9 +1200,9 @@ GTMProxy_ThreadMain(void *argp)
 				 */
 				if (conninfo->con_disconnected)
 				{
-					GTMProxy_ThreadRemoveConnection(thrinfo, conninfo);
-					pfree(conninfo);
-					ii--;
+					//GTMProxy_ThreadRemoveConnection(thrinfo, conninfo);
+					//pfree(conninfo);
+					//ii--;
 				}
 				else
 				{
@@ -1239,7 +1258,7 @@ GTMProxy_ThreadMain(void *argp)
 		MemoryContextResetAndDeleteChildren(MessageContext);
 
 		/*
-		 * The following block should be skipped at the first turn.
+		 * The following block should be skipped at the first turn .
 		 */
 		if (!first_turn)
 		{
@@ -1248,7 +1267,8 @@ GTMProxy_ThreadMain(void *argp)
 			 * this thread. If so, we need to rebuild the fd array.
 			 */
 			GTM_MutexLockAcquire(&thrinfo->thr_lock);
-			if (saved_seqno != thrinfo->thr_seqno)
+			if (saved_seqno != thrinfo->thr_seqno
+							&& thrinfo->thr_conn_count < GTM_PROXY_MAX_CONNECTIONS)
 			{
 				saved_seqno = thrinfo->thr_seqno;
 
@@ -1270,44 +1290,72 @@ GTMProxy_ThreadMain(void *argp)
 						workerThreadReconnectToGTM();
 					}
 				}
-
-				memset(thrinfo->thr_poll_fds, 0, sizeof (thrinfo->thr_poll_fds));
+				if (gtm_list_length(thrinfo->thr_new_conns) > 0)
+				{
+					thrinfo->thr_pri_new_conns = gtm_list_concat(thrinfo->thr_pri_new_conns,
+															gtm_list_copy(thrinfo->thr_new_conns));
+					thrinfo->copy_new_conns = true;
+				}
+				//memset(thrinfo->thr_poll_fds, 0, sizeof (thrinfo->thr_poll_fds));
 
 				/*
 				 * Now grab all the open connections. A lock is being hold so no
 				 * new connections can be added.
 				 */
+				/*
 				for (ii = 0; ii < thrinfo->thr_conn_count; ii++)
 				{
 					GTMProxy_ConnectionInfo *conninfo = thrinfo->thr_all_conns[ii];
-
+					*/
 					/*
 					 * Detect if the connection has been dropped to avoid
 					 * a segmentation fault.
 					 */
-					if (conninfo->con_port == NULL)
+					/*if (conninfo->con_port == NULL)
 					{
 						conninfo->con_disconnected = true;
 						continue;
-					}
+					}*/
 
 					/*
 					 * If this is a newly added connection, complete the handshake
 					 */
-					if (!conninfo->con_authenticated)
+				/*	if (!conninfo->con_authenticated)
 						GTMProxy_HandshakeConnection(conninfo);
-
+					pgxc_add_conn(thrinfo->GTM_ConnHTable, conninfo);
 					thrinfo->thr_poll_fds[ii].fd = conninfo->con_port->sock;
 					thrinfo->thr_poll_fds[ii].events = POLLIN;
 					thrinfo->thr_poll_fds[ii].revents = 0;
-				}
+				}*/
 			}
 			GTM_MutexLockRelease(&thrinfo->thr_lock);
+			if (thrinfo->thr_conn_count < GTM_PROXY_MAX_CONNECTIONS) {
+				gtm_foreach(elem, thrinfo->thr_pri_new_conns)
+				{
+					Port *port = (Port *)gtm_lfirst(elem);
+					GTMProxy_ConnectionInfo	*cur_free_conn = thrinfo->cur_free_conn_head;
+					Assert(cur_free_conn != NULL);
+					thrinfo->thr_new_conns = gtm_list_delete(thrinfo->thr_pri_new_conns, elem);
+					thrinfo->cur_free_conn_head = cur_free_conn->next;
+					cur_free_conn->next = NULL;
+					cur_free_conn->con_port = port;
+					GTMProxy_HandshakeConnection(cur_free_conn);
+					event_cell.events = EPOLLIN;
+					event_cell.data.fd = port->sock;
+					if (epoll_ctl(thrinfo->epoll_fd, EPOLL_CTL_ADD, port->sock, &event_cell) == -1) {
+						elog(ERROR, "Failed to add sock to epoll file handle");
+					}
+					pgxc_add_conn(thrinfo->GTM_ConnHTable, cur_free_conn);
+					thrinfo->thr_conn_count++;
+					if (thrinfo->thr_conn_count == GTM_PROXY_MAX_CONNECTIONS)
+						break;
+				}
+			}
 
 			while (true)
 			{
 				Enable_Longjmp();
-				nrfds = poll(thrinfo->thr_poll_fds, thrinfo->thr_conn_count, 1000);
+				nrfds = epoll_wait(thrinfo->thr_epoll_fd, event_set, GTM_PROXY_MAX_CONNECTIONS);
 				Disable_Longjmp();
 
 				if (nrfds < 0)
@@ -1378,12 +1426,13 @@ setjmp_again:
 		 * Now, read command from each of the connections that has some data to
 		 * be read.
 		 */
-		for (ii = 0; ii < thrinfo->thr_conn_count; ii++)
+		for (ii = 0; ii < nrfds; ii++)
 		{
-			GTMProxy_ConnectionInfo *conninfo = thrinfo->thr_all_conns[ii];
+			GTMProxy_ConnectionInfo *conninfo = pgxc_find_conn(thrinfo->GTM_ConnHTable, 
+																event_set[ii].data.fd);
 			thrinfo->thr_conn = conninfo;
 
-			if (thrinfo->thr_poll_fds[ii].revents & POLLHUP)
+			if (event_set[ii].events & EPOLLHUP)
 			{
 				/*
 				 * The fd has become invalid. The connection is broken. Add it
@@ -1395,15 +1444,15 @@ setjmp_again:
 				continue;
 			}
 
-			if ((thrinfo->thr_any_backup[ii]) ||
-				(thrinfo->thr_poll_fds[ii].revents & POLLIN))
+			if ((thrinfo->thr_any_backup[conninfo->con_id]) ||
+				(event_set[ii].events  & EPOLLIN))
 			{
 				/*
 				 * (3) read a command (loop blocks here)
 				 */
 				qtype = ReadCommand(thrinfo->thr_conn, &input_message);
 
-				thrinfo->thr_poll_fds[ii].revents = 0;
+				//thrinfo->thr_poll_fds[ii].revents = 0;
 
 				switch(qtype)
 				{
@@ -1512,6 +1561,7 @@ setjmp_again:
 		/*
 		 * Now clean up disconnected connections
 		 */
+		/*
 		for (ii = 0; ii < thrinfo->thr_conn_count; ii++)
 		{
 			GTMProxy_ConnectionInfo *conninfo = thrinfo->thr_all_conns[ii];
@@ -1521,7 +1571,7 @@ setjmp_again:
 				pfree(conninfo);
 				ii--;
 			}
-		}
+		}*/
 	}
 
 	/* can't get here because the above loop never exits */
@@ -1529,14 +1579,85 @@ setjmp_again:
 }
 
 /*
+ * Find the connection info structure for the given socket.
+ */
+static GTMProxy_ConnectionInfo *
+pgxc_find_conn(GTM_ConnHashBucket *HTable, int socket)
+{
+	uint32 hash = socket%GTM_PROXY_MAX_CONNECTIONS;
+	GTM_ConnHashBucket *bucket = &HTable[hash];
+	gtm_ListCell *elem;
+	GTMProxy_ConnectionInfo *conninfo = NULL;
+
+	gtm_foreach(elem, bucket->nhb_list)
+	{
+		conninfo = (GTMProxy_ConnectionInfo *) gtm_lfirst(elem);
+		Assert(conninfo->con_port != NULL);
+		if (conninfo->con_port->sock == socket)
+			return conninfo;
+	}
+	return NULL;
+}
+
+/*
+ * Remove a PGXC connection Info structure from hash table
+ */
+static int
+pgxc_remove_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
+{
+	Assert(conninfo->con_port != NULL);
+	uint32 hash = (conninfo->con_port->sock)%GTM_PROXY_MAX_CONNECTIONS;
+	GTM_ConnHashBucket *bucket = &HTable[hash];
+
+	bucket = &GTM_PGXCNodes[hash];
+
+	bucket->nhb_list = gtm_list_delete(bucket->nhb_list, nodeinfo);
+
+    return 0;
+}
+
+/*
+ * Add a PGXC connection info structure to hash table
+ */
+static int
+pgxc_add_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
+{
+	Assert(conninfo->con_port != NULL);
+	uint32 hash = (conninfo->con_port->sock)%GTM_PROXY_MAX_CONNECTIONS;
+	GTM_ConnHashBucket *bucket = &HTable[hash];
+	gtm_ListCell *elem;
+	GTMProxy_ConnectionInfo *curr_conninfo = NULL;
+
+	bucket = &GTM_PGXCNodes[hash];
+
+	gtm_foreach(elem, bucket->nhb_list)
+	{
+		curr_conninfo = (GTMProxy_ConnectionInfo *) gtm_lfirst(elem);
+		Assert(curr_conninfo->con_port != NULL);
+		if (curr_conninfo->con_port->sock == conninfo->con_port->sock)
+		{
+			ereport(LOG,
+					(EEXIST,
+					errmsg("Node with the given ID number already exists")));
+			return EEXIST;
+		}
+	}
+
+	bucket->nhb_list = gtm_lappend(bucket->nhb_list, conninfo);
+
+	return 0;
+}
+
+
+/*
  * Add the accepted connection to the pool
  */
 static int
 GTMProxyAddConnection(Port *port)
 {
-	GTMProxy_ConnectionInfo *conninfo = NULL;
+	//GTMProxy_ConnectionInfo *conninfo = NULL;
 
-	conninfo = (GTMProxy_ConnectionInfo *)palloc0(sizeof (GTMProxy_ConnectionInfo));
+	/*conninfo = (GTMProxy_ConnectionInfo *)palloc0(sizeof (GTMProxy_ConnectionInfo));
 
 	if (conninfo == NULL)
 	{
@@ -1548,11 +1669,11 @@ GTMProxyAddConnection(Port *port)
 
 	elog(DEBUG3, "Started new connection");
 	conninfo->con_port = port;
-
+	*/
 	/*
 	 * Add the conninfo struct to the next worker thread in round-robin manner
 	 */
-	GTMProxy_ThreadAddConnection(conninfo);
+	GTMProxy_ThreadAddConnection(port);
 
 	return STATUS_OK;
 }
@@ -1708,9 +1829,9 @@ HandleGTMError(GTM_Conn *gtm_conn)
 static GTM_Conn *
 HandlePostCommand(GTMProxy_ConnectionInfo *conninfo, GTM_Conn *gtm_conn)
 {
-	int connIdx;
+	int connIdx = conninfo->con_id;
 
-	connIdx = GTMProxy_GetConnInfoIndex(GetMyThreadInfo, conninfo->con_id);
+	//connIdx = GTMProxy_GetConnInfoIndex(GetMyThreadInfo, conninfo->con_id);
 
 	Assert(conninfo && gtm_conn);
 	/*
@@ -2004,10 +2125,10 @@ static int
 ReadCommand(GTMProxy_ConnectionInfo *conninfo, StringInfo inBuf)
 {
 	int 			qtype;
-	int				connIdx;
+	int				connIdx = conninfo->con_id;
 	int				anyBackup;
 
-	connIdx = GTMProxy_GetConnInfoIndex(GetMyThreadInfo, conninfo->con_id);
+	//connIdx = GTMProxy_GetConnInfoIndex(GetMyThreadInfo, conninfo->con_id);
 	anyBackup = (GetMyThreadInfo->thr_any_backup[connIdx] ? TRUE : FALSE);
 
 	/*
@@ -2840,6 +2961,11 @@ GTMProxy_ProcessPendingCommands(GTMProxy_ThreadInfo *thrinfo)
 				(EPROTO,
 				 errmsg("cleaning up client disconnection")));
 		cmdinfo = (GTMProxy_CommandInfo *)gtm_lfirst(elem);
+		pgxc_remove_conn(thrinfo->GTM_ConnHTable, cmdinfo->ci_conn);
+		if (cmdinfo->ci_conn->con_port->sock > 0) {
+			epoll_ctl(thrinfo->thr_epoll_fd, EPOLL_CTL_DEL,
+						cmdinfo->ci_conn->con_port->sock, NULL); 
+		}
 		GTMProxy_HandleDisconnect(cmdinfo->ci_conn, gtm_conn);
 	}
 }
