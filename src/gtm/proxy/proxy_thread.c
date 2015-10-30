@@ -145,7 +145,7 @@ GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx)
 	GTM_CVInit(&thrinfo->thr_cv);
 
 	/* Initialize mapping to be unassigned. */
-	memset(thrinfo->thr_conid2idx, 0xff, sizeof(thrinfo->thr_conid2idx));
+	//memset(thrinfo->thr_conid2idx, 0xff, sizeof(thrinfo->thr_conid2idx));
 
 	/*
 	 * Initialize communication area with SIGUSR2 signal handler (reconnect)
@@ -442,7 +442,7 @@ GTMProxy_ThreadRemoveConnection(GTMProxy_ThreadInfo *thrinfo, GTMProxy_Connectio
 	 * Lock the threadninfo structure to safely remove the connection from the
 	 * thread structure.
 	 */
-	GTM_MutexLockAcquire(&thrinfo->thr_lock);
+	/*GTM_MutexLockAcquire(&thrinfo->thr_lock);
 
 	for (ii = 0; ii < thrinfo->thr_conn_count; ii++)
 	{
@@ -456,57 +456,53 @@ GTMProxy_ThreadRemoveConnection(GTMProxy_ThreadInfo *thrinfo, GTMProxy_Connectio
 		elog(ERROR, "No such connection");
 	}
 
-	/*
-	 * Reset command backup info
-	 */
 	thrinfo->thr_any_backup[ii] = FALSE;
 	thrinfo->thr_qtype[ii] = 0;
 	resetStringInfo(&(thrinfo->thr_inBufData[ii]));
 
-	/* Release connection id */
 	if (conninfo->con_id != InvalidGTMProxyConnID)
 	{
 		thrinfo->thr_conid2idx[conninfo->con_id] = -1;
 		elog(DEBUG5, "Released connection id %d", conninfo->con_id);
 	}
-
+*/
 	/*
 	 * If this is the last entry in the array ? If not, then copy the last
 	 * entry in this slot and mark the last slot an empty
 	 */
-	if ((ii + 1) < thrinfo->thr_conn_count)
+/*	if ((ii + 1) < thrinfo->thr_conn_count)
 	{
 		GTMProxy_ConnectionInfo *ci_moved;
 		int last_idx;
-
+*/
 		/* Pick up last slot */
-		last_idx = thrinfo->thr_conn_count - 1;
-		ci_moved = thrinfo->thr_all_conns[last_idx];
+//		last_idx = thrinfo->thr_conn_count - 1;
+//		ci_moved = thrinfo->thr_all_conns[last_idx];
 		
 		/* Copy the last entry in this slot */
-		thrinfo->thr_all_conns[ii] = ci_moved;
+//		thrinfo->thr_all_conns[ii] = ci_moved;
 
 		/* Mark the last slot free */
-		thrinfo->thr_all_conns[last_idx] = NULL;
+//		thrinfo->thr_all_conns[last_idx] = NULL;
 
 		/* Adjust the mapping to reflect the current slot in the array */
-		if (ci_moved->con_id != InvalidGTMProxyConnID)
-			thrinfo->thr_conid2idx[ci_moved->con_id] = ii;
-	}
-	else
-	{
+//		if (ci_moved->con_id != InvalidGTMProxyConnID)
+//			thrinfo->thr_conid2idx[ci_moved->con_id] = ii;
+//	}
+//	else
+//	{
 		/* This is the last entry in the array. Just mark it free */
-		thrinfo->thr_all_conns[ii] = NULL;
-	}
+//		thrinfo->thr_all_conns[ii] = NULL;
+//	}
 
-	thrinfo->thr_conn_count--;
+//	thrinfo->thr_conn_count--;
 
 	/*
 	 * Increment the seqno to ensure that the next time before we poll, the fd
 	 * array is reconstructed.
 	 */
-	thrinfo->thr_seqno++;
-	GTM_MutexLockRelease(&thrinfo->thr_lock);
+//	thrinfo->thr_seqno++;
+//	GTM_MutexLockRelease(&thrinfo->thr_lock);
 
 	return 0;
 }

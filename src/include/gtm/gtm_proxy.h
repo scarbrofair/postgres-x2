@@ -60,6 +60,11 @@ typedef struct GTMProxy_Connections
 	GTM_RWLock				gc_lock;
 } GTMProxy_Connections;
 
+typedef struct GTM_ConnHashBucket
+{
+	gtm_List        *nhb_list;
+} GTM_ConnHashBucket;
+
 #define ERRORDATA_STACK_SIZE  20
 #define GTM_PROXY_MAX_CONNECTIONS	1024
 
@@ -157,7 +162,7 @@ void GTMProxy_ThreadExit(void);
 
 extern GTMProxy_ThreadInfo *GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx);
 extern GTMProxy_ThreadInfo * GTMProxy_GetThreadInfo(GTM_ThreadID thrid);
-extern GTMProxy_ThreadInfo *GTMProxy_ThreadAddConnection(GTMProxy_ConnectionInfo *conninfo);
+extern GTMProxy_ThreadInfo *GTMProxy_ThreadAddConnection(Port *port);
 extern int GTMProxy_ThreadRemoveConnection(GTMProxy_ThreadInfo *thrinfo,
 		GTMProxy_ConnectionInfo *conninfo);
 

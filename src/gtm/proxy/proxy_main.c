@@ -121,11 +121,6 @@ pthread_key_t	threadinfo_key;
 static bool		GTMProxyAbortPending = false;
 static GTM_Conn *master_conn;
 
-typedef struct GTM_ConnHashBucket
-{
-	gtm_List        *nhb_list;
-} GTM_ConnHashBucket;
-
 /*
  * External Routines
  */
@@ -192,12 +187,15 @@ static void UnregisterProxy(void);
 static GTM_Conn *ConnectGTM(void);
 static void ReleaseCmdBackup(GTMProxy_CommandInfo *cmdinfo);
 static void workerThreadReconnectToGTM(void);
+
 static GTMProxy_ConnectionInfo *pgxc_find_conn(GTM_ConnHashBucket *HTable,
 												int socket);
+
 static int pgxc_remove_conn(GTM_ConnHashBucket *HTable,
 							GTMProxy_ConnectionInfo *conninfo);
+
 static int pgxc_add_conn(GTM_ConnHashBucket *HTable,
-							GTMProxy_ConnectionInfo *conninfo)
+							GTMProxy_ConnectionInfo *conninfo);
 
 
 /*
@@ -1142,7 +1140,7 @@ GTMProxy_ThreadMain(void *argp)
 
 	thrinfo->thr_epoll_fd = epoll_create(GTM_PROXY_MAX_CONNECTIONS);
 
-	if (thrinfo->epoll_fd == -1)
+	if (thrinfo->thr_epoll_fd == -1)
 		elog(FATAL, "GTM failed to create epoll fd");
 
 	/*
@@ -1194,7 +1192,7 @@ GTMProxy_ThreadMain(void *argp)
 		{
 			for (ii = 0; ii < thrinfo->thr_conn_count; ii++)
 			{
-				GTMProxy_ConnectionInfo *conninfo = thrinfo->thr_all_conns[ii];
+				GTMProxy_ConnectionInfo *conninfo = &(thrinfo->thr_all_conns[ii]);
 				/*
 				 * Now clean up disconnected connections
 				 */
@@ -1342,7 +1340,8 @@ GTMProxy_ThreadMain(void *argp)
 					GTMProxy_HandshakeConnection(cur_free_conn);
 					event_cell.events = EPOLLIN;
 					event_cell.data.fd = port->sock;
-					if (epoll_ctl(thrinfo->epoll_fd, EPOLL_CTL_ADD, port->sock, &event_cell) == -1) {
+					if (epoll_ctl(thrinfo->thr_epoll_fd, EPOLL_CTL_ADD, port->sock,
+									&event_cell) == -1) {
 						elog(ERROR, "Failed to add sock to epoll file handle");
 					}
 					pgxc_add_conn(thrinfo->GTM_ConnHTable, cur_free_conn);
@@ -1355,7 +1354,7 @@ GTMProxy_ThreadMain(void *argp)
 			while (true)
 			{
 				Enable_Longjmp();
-				nrfds = epoll_wait(thrinfo->thr_epoll_fd, event_set, GTM_PROXY_MAX_CONNECTIONS);
+				nrfds = epoll_wait(thrinfo->thr_epoll_fd, event_set, GTM_PROXY_MAX_CONNECTIONS, 1000);
 				Disable_Longjmp();
 
 				if (nrfds < 0)
@@ -1608,10 +1607,7 @@ pgxc_remove_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 	Assert(conninfo->con_port != NULL);
 	uint32 hash = (conninfo->con_port->sock)%GTM_PROXY_MAX_CONNECTIONS;
 	GTM_ConnHashBucket *bucket = &HTable[hash];
-
-	bucket = &GTM_PGXCNodes[hash];
-
-	bucket->nhb_list = gtm_list_delete(bucket->nhb_list, nodeinfo);
+	bucket->nhb_list = gtm_list_delete(bucket->nhb_list, conninfo);
 
     return 0;
 }
@@ -1627,8 +1623,6 @@ pgxc_add_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 	GTM_ConnHashBucket *bucket = &HTable[hash];
 	gtm_ListCell *elem;
 	GTMProxy_ConnectionInfo *curr_conninfo = NULL;
-
-	bucket = &GTM_PGXCNodes[hash];
 
 	gtm_foreach(elem, bucket->nhb_list)
 	{
@@ -1684,19 +1678,17 @@ GTMProxy_GetConnInfoIndex(GTMProxy_ThreadInfo *thrinfo, GTMProxy_ConnID con_id)
 {
 	if (con_id == InvalidGTMProxyConnID)
 		return -1;
-	return thrinfo->thr_conid2idx[con_id];
+	return con_id;
 }
 
 static GTMProxy_ConnectionInfo *
 GTMProxy_GetConnInfo(GTMProxy_ThreadInfo *thrinfo, GTMProxy_ConnID con_id)
 {
-	int con_idx;
 
-	con_idx = GTMProxy_GetConnInfoIndex(thrinfo, con_id);
-	if (con_idx < 0)
+	if (con_id < 0)
 		return NULL;
 
-	return thrinfo->thr_all_conns[con_idx];
+	return &(thrinfo->thr_all_conns[con_id]);
 }
 
 void
@@ -2966,6 +2958,7 @@ GTMProxy_ProcessPendingCommands(GTMProxy_ThreadInfo *thrinfo)
 			epoll_ctl(thrinfo->thr_epoll_fd, EPOLL_CTL_DEL,
 						cmdinfo->ci_conn->con_port->sock, NULL); 
 		}
+		thrinfo->thr_conn_count--;
 		GTMProxy_HandleDisconnect(cmdinfo->ci_conn, gtm_conn);
 	}
 }
