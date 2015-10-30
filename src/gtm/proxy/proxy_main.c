@@ -2960,6 +2960,8 @@ GTMProxy_ProcessPendingCommands(GTMProxy_ThreadInfo *thrinfo)
 		}
 		thrinfo->thr_conn_count--;
 		GTMProxy_HandleDisconnect(cmdinfo->ci_conn, gtm_conn);
+		cmdinfo->ci_conn->next = thrinfo->cur_free_conn_head;
+		thrinfo->cur_free_conn_head = cmdinfo->ci_conn;
 	}
 }
 
