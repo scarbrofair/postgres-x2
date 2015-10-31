@@ -164,7 +164,7 @@ GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx)
 	(thrinfo->thr_all_conns[GTM_PROXY_MAX_CONNECTIONS-1]).next = NULL;
 	thrinfo->thr_new_conns = NULL;
 	thrinfo->thr_pri_new_conns = NULL;
-	thrinfo->copy_new_conns = true;
+	thrinfo->copy_new_conns = false;
 	/*
 	 * Install the ThreadInfo structure in the global array. We do this before
 	 * starting the thread
@@ -384,6 +384,7 @@ GTMProxy_ThreadAddConnection(Port *port)
 		if (thrinfo->copy_new_conns && thrinfo->thr_new_conns != NULL) {
 			gtm_list_free(thrinfo->thr_new_conns);
 			thrinfo->thr_new_conns = NULL;
+			thrinfo->copy_new_conns = false;
 		}
 
 		thrinfo->thr_new_conns =  gtm_lappend(thrinfo->thr_new_conns, port);

@@ -1316,37 +1316,6 @@ GTMProxy_ThreadMain(void *argp)
 				}
                 thrinfo->copy_new_conns = true;
     
-				//memset(thrinfo->thr_poll_fds, 0, sizeof (thrinfo->thr_poll_fds));
-
-				/*
-				 * Now grab all the open connections. A lock is being hold so no
-				 * new connections can be added.
-				 */
-				/*
-				for (ii = 0; ii < thrinfo->thr_conn_count; ii++)
-				{
-					GTMProxy_ConnectionInfo *conninfo = thrinfo->thr_all_conns[ii];
-					*/
-					/*
-					 * Detect if the connection has been dropped to avoid
-					 * a segmentation fault.
-					 */
-					/*if (conninfo->con_port == NULL)
-					{
-						conninfo->con_disconnected = true;
-						continue;
-					}*/
-
-					/*
-					 * If this is a newly added connection, complete the handshake
-					 */
-				/*	if (!conninfo->con_authenticated)
-						GTMProxy_HandshakeConnection(conninfo);
-					pgxc_add_conn(thrinfo->GTM_ConnHTable, conninfo);
-					thrinfo->thr_poll_fds[ii].fd = conninfo->con_port->sock;
-					thrinfo->thr_poll_fds[ii].events = POLLIN;
-					thrinfo->thr_poll_fds[ii].revents = 0;
-				}*/
 			}
 			GTM_MutexLockRelease(&thrinfo->thr_lock);
             Disable_Longjmp();
@@ -1566,21 +1535,6 @@ setjmp_again:
 
 		gtm_list_free_deep(thrinfo->thr_processed_commands);
 		thrinfo->thr_processed_commands = gtm_NIL;
-
-		/*
-		 * Now clean up disconnected connections
-		 */
-		/*
-		for (ii = 0; ii < thrinfo->thr_conn_count; ii++)
-		{
-			GTMProxy_ConnectionInfo *conninfo = thrinfo->thr_all_conns[ii];
-			if (conninfo->con_disconnected)
-			{
-				GTMProxy_ThreadRemoveConnection(thrinfo, conninfo);
-				pfree(conninfo);
-				ii--;
-			}
-		}*/
 	}
 
 	/* can't get here because the above loop never exits */
