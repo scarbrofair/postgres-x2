@@ -129,8 +129,6 @@ typedef struct GTMProxy_ThreadInfo
 
 	gtm_List 					*thr_processed_commands;
 	gtm_List 					*thr_pending_commands[MSG_TYPE_COUNT];
-	/* New conns, belong to my memcontext*/
-	gtm_List					*thr_pri_new_conns;
 	/* New conns, but belong to the master thread memcontext*/
 	gtm_List 					*thr_new_conns; 
 	GTM_Conn				*thr_gtm_conn;		/* Connection to GTM */

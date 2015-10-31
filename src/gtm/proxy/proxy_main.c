@@ -1160,7 +1160,9 @@ GTMProxy_ThreadMain(void *argp)
 	{
 		thrinfo->thr_any_backup[ii] = FALSE;
 		thrinfo->thr_qtype[ii] = 0;
-		thrinfo->thr_all_conns[ii].con_id = ii;
+        thrinfo->thr_all_conns[ii].con_id = ii;
+        thrinfo->thr_all_conns[ii].con_disconnected = true;
+		thrinfo->thr_all_conns[ii].con_authenticated = false; 
 		initStringInfo(&(thrinfo->thr_inBufData[ii]));
 	}
 
@@ -1190,20 +1192,17 @@ GTMProxy_ThreadMain(void *argp)
 		/* Report the error to the client and/or server log */
 		if (thrinfo->thr_conn_count > 0)
 		{
-			for (ii = 0; ii < thrinfo->thr_conn_count; ii++)
+			for (ii = 0; ii < GTM_PROXY_MAX_CONNECTIONS; ii++)
 			{
 				GTMProxy_ConnectionInfo *conninfo = &(thrinfo->thr_all_conns[ii]);
 				/*
 				 * Now clean up disconnected connections
 				 */
-				if (conninfo->con_disconnected)
+				if (!(conninfo->con_disconnected))
 				{
-					//GTMProxy_ThreadRemoveConnection(thrinfo, conninfo);
-					//pfree(conninfo);
-					//ii--;
-				}
-				else
-				{
+                    if (!(conninfo->con_disconnected)) {
+                        
+                    } 
 					/*
 					 * Consume all the pending data on this connection and send
 					 * error report
@@ -1270,7 +1269,7 @@ GTMProxy_ThreadMain(void *argp)
 			{
 				saved_seqno = thrinfo->thr_seqno;
 
-				while (thrinfo->copy_new_conns)
+				while (gtm_list_length(thrinfo->thr_new_conns) == 0)
 				{
 					/*
 					 * No connections assigned to the thread. Wait for at least one
@@ -1288,12 +1287,31 @@ GTMProxy_ThreadMain(void *argp)
 						workerThreadReconnectToGTM();
 					}
 				}
-				if (gtm_list_length(thrinfo->thr_new_conns) > 0 && !(thrinfo->copy_new_conns))
+				gtm_foreach(elem, thrinfo->thr_new_conns)
 				{
-					thrinfo->thr_pri_new_conns = gtm_list_concat(thrinfo->thr_pri_new_conns,
-															gtm_list_copy(thrinfo->thr_new_conns));
-					thrinfo->copy_new_conns = true;
+					Port *port = (Port *)gtm_lfirst(elem);
+					GTMProxy_ConnectionInfo	*cur_free_conn = thrinfo->cur_free_conn_head;
+
+					cur_free_conn->con_port = port;
+					if (GTMProxy_HandshakeConnection(cur_free_conn) != STATUS_OK) {
+                        continue;
+                    }
+					event_cell.events = EPOLLIN;
+					event_cell.data.fd = port->sock;
+					if (epoll_ctl(thrinfo->thr_epoll_fd, EPOLL_CTL_ADD, port->sock,
+									&event_cell) == -1) {
+						elog(WARNING, "Failed to add sock to epoll file handle");
+                        continue;
+					}
+					thrinfo->cur_free_conn_head = cur_free_conn->next;
+					cur_free_conn->next = NULL;
+                    cur_free_conn->con_disconnected = false;
+
+					pgxc_add_conn(thrinfo->GTM_ConnHTable, cur_free_conn);
+					thrinfo->thr_conn_count++;
 				}
+                thrinfo->copy_new_conns = true;
+    
 				//memset(thrinfo->thr_poll_fds, 0, sizeof (thrinfo->thr_poll_fds));
 
 				/*
@@ -1327,30 +1345,8 @@ GTMProxy_ThreadMain(void *argp)
 				}*/
 			}
 			GTM_MutexLockRelease(&thrinfo->thr_lock);
-			if (thrinfo->thr_conn_count < GTM_PROXY_MAX_CONNECTIONS) {
-				gtm_foreach(elem, thrinfo->thr_pri_new_conns)
-				{
-					Port *port = (Port *)gtm_lfirst(elem);
-					GTMProxy_ConnectionInfo	*cur_free_conn = thrinfo->cur_free_conn_head;
-					Assert(cur_free_conn != NULL);
-					thrinfo->thr_new_conns = gtm_list_delete(thrinfo->thr_pri_new_conns, elem);
-					thrinfo->cur_free_conn_head = cur_free_conn->next;
-					cur_free_conn->next = NULL;
-					cur_free_conn->con_port = port;
-					GTMProxy_HandshakeConnection(cur_free_conn);
-					event_cell.events = EPOLLIN;
-					event_cell.data.fd = port->sock;
-					if (epoll_ctl(thrinfo->thr_epoll_fd, EPOLL_CTL_ADD, port->sock,
-									&event_cell) == -1) {
-						elog(ERROR, "Failed to add sock to epoll file handle");
-					}
-					pgxc_add_conn(thrinfo->GTM_ConnHTable, cur_free_conn);
-					thrinfo->thr_conn_count++;
-					if (thrinfo->thr_conn_count == GTM_PROXY_MAX_CONNECTIONS)
-						break;
-				}
-			}
-
+            Disable_Longjmp();
+			
 			while (true)
 			{
 				Enable_Longjmp();
@@ -1480,8 +1476,16 @@ setjmp_again:
 						/*
 						 * Also disconnect if protocol error
 						 */
+                        thrinfo->thr_conn_count--;
+		                thrinfo->thr_conn->next = thrinfo->cur_free_conn_head;
+		                thrinfo->cur_free_conn_head = thrinfo->thr_conn;
 						GTMProxy_HandleDisconnect(thrinfo->thr_conn, thrinfo->thr_gtm_conn);
-						elog(ERROR, "Unexpected message, or client disconnected abruptly.");
+                		pgxc_remove_conn(thrinfo->GTM_ConnHTable, cmdinfo->ci_conn);
+		                if (cmdinfo->ci_conn->con_port->sock > 0) {
+			                epoll_ctl(thrinfo->thr_epoll_fd, EPOLL_CTL_DEL,
+                                        cmdinfo->ci_conn->con_port->sock, NULL); 
+		                }
+						elog(WARNING, "Unexpected message, or client disconnected abruptly.");
 						break;
 				}
 
@@ -1667,9 +1671,7 @@ GTMProxyAddConnection(Port *port)
 	/*
 	 * Add the conninfo struct to the next worker thread in round-robin manner
 	 */
-	GTMProxy_ThreadAddConnection(port);
-
-	return STATUS_OK;
+	return GTMProxy_ThreadAddConnection(port);
 }
 
 /* Convert a connection id to a index in GTMProxy_ThreadInfo::thr_all_conns */
@@ -2653,7 +2655,7 @@ GTMProxy_RegisterPGXCNode(GTMProxy_ConnectionInfo *conninfo,
 	conninfo->con_port->is_postmaster = is_postmaster;
 }
 
-static void
+static int
 GTMProxy_HandshakeConnection(GTMProxy_ConnectionInfo *conninfo)
 {
 	/*
@@ -2667,11 +2669,13 @@ GTMProxy_HandshakeConnection(GTMProxy_ConnectionInfo *conninfo)
 
 	startup_type = pq_getbyte(conninfo->con_port);
 
-	if (startup_type != 'A')
-		ereport(ERROR,
+	if (startup_type != 'A') {
+		elog(WARING,
 				(EPROTO,
 				 errmsg("Expecting a startup message, but received %c",
 					 startup_type)));
+        return STATUS_ERROR;
+    }
 
 	initStringInfo(&inBuf);
 
@@ -2680,10 +2684,13 @@ GTMProxy_HandshakeConnection(GTMProxy_ConnectionInfo *conninfo)
 	 * after the type code; we can read the message contents independently of
 	 * the type.
 	 */
-	if (pq_getmessage(conninfo->con_port, &inBuf, 0))
-		ereport(ERROR,
+	if (pq_getmessage(conninfo->con_port, &inBuf, 0)) {
+		elog(WARING,
 				(EPROTO,
 				 errmsg("Expecting PGXC Node ID, but received EOF")));
+        return STATUS_ERROR;
+
+    }
 
 	memcpy(&sp,
 		   pq_getmsgbytes(&inBuf, sizeof (GTM_StartupPacket)),
@@ -2703,6 +2710,7 @@ GTMProxy_HandshakeConnection(GTMProxy_ConnectionInfo *conninfo)
 	conninfo->con_authenticated = true;
 
 	elog(DEBUG3, "Sent connection authentication message to the client");
+    return STATUS_OK;
 }
 
 static void
@@ -2742,7 +2750,7 @@ GTMProxy_HandleDisconnect(GTMProxy_ConnectionInfo *conninfo, GTM_Conn *gtm_conn)
 	/* Finish the message. */
 	if (gtmpqPutMsgEnd(gtm_conn))
 		elog(ERROR, "Error finishing the message");
-
+    conninfo.con_authenticated = false;
 	conninfo->con_disconnected = true;
 	if (conninfo->con_port->sock > 0)
 		StreamClose(conninfo->con_port->sock);

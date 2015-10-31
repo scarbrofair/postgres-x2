@@ -157,8 +157,7 @@ GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx)
 	 * the thread itself when it actually starts executing
 	 */
 	thrinfo->thr_status = GTM_PROXY_THREAD_STARTING;
-
-	thrinfo->cur_free_conn_head = NULL;
+	thrinfo->cur_free_conn_head = &(thrinfo->thr_all_conns[0]);
 	for (i = 0; i < (GTM_PROXY_MAX_CONNECTIONS-1); i++) {
 		thrinfo->thr_all_conns[i].next = &(thrinfo->thr_all_conns[i+1]);
 	}
@@ -339,10 +338,9 @@ GTMProxy_ThreadMainWrapper(void *argp)
  * Return the reference to the GTMProxy_ThreadInfo structure of the thread
  * which will be serving this connection
  */
-GTMProxy_ThreadInfo *
+int
 GTMProxy_ThreadAddConnection(Port *port)
 {
-	int con_id = -1, con_idx = 0;
 	GTMProxy_ThreadInfo *thrinfo = NULL;
 
 	/*
@@ -373,18 +371,18 @@ GTMProxy_ThreadAddConnection(Port *port)
 	 * socket descriptor in the next cycle
 	 */
 	GTM_MutexLockAcquire(&thrinfo->thr_lock);
+    if (thrinfo->copy_new_conns && thrinfo->thr_new_conns != NULL) {
+        gtm_list_free(thrinfo->thr_new_conns);
+        thrinfo->thr_new_conns = NULL;
+    }
 
-	if (thrinfo->thr_conn_count >= GTM_PROXY_MAX_CONNECTIONS)
+	if (thrinfo->thr_conn_count + gtm_list_length(thrinfo->thr_new_conns) >= 
+            GTM_PROXY_MAX_CONNECTIONS)
 	{
 		GTM_MutexLockRelease(&thrinfo->thr_lock);
 		elog(WARNING, "Too many connections");
+        return STATUS_ERROR;
 	}
-	if (thrinfo->copy_new_conns) {
-		// have been copied by the thread, so clear this list
-		gtm_list_free(thrinfo->thr_new_conns);
-		thrinfo->thr_new_conns  = NULL;
-		thrinfo->copy_new_conns = false;
-	} 
 	thrinfo->thr_new_conns =  gtm_lappend(thrinfo->thr_new_conns, port);
 	/* Find unassigned connection id in this worker thread. */
 	/*for (con_id = 0; con_id < GTM_PROXY_MAX_CONNECTIONS; con_id++)
@@ -427,7 +425,7 @@ GTMProxy_ThreadAddConnection(Port *port)
 	GTM_CVBcast(&thrinfo->thr_cv);
 	GTM_MutexLockRelease(&thrinfo->thr_lock);
 
-	return thrinfo;
+	return STATUS_OK;
 }
 
 /*
