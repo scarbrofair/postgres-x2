@@ -1200,10 +1200,7 @@ GTMProxy_ThreadMain(void *argp)
 				 */
 				if (!(conninfo->con_disconnected))
 				{
-                    if (!(conninfo->con_disconnected)) {
-                        
-                    } 
-					/*
+  					/*
 					 * Consume all the pending data on this connection and send
 					 * error report
 					 */
@@ -1294,12 +1291,19 @@ GTMProxy_ThreadMain(void *argp)
 
 					cur_free_conn->con_port = port;
 					if (GTMProxy_HandshakeConnection(cur_free_conn) != STATUS_OK) {
+                        if (port->sock > 0) {
+		                    StreamClose(port->sock);
+	                        ConnFree(port);
+                        }
+                        cur_free_conn->con_port = NULL;
                         continue;
                     }
 					event_cell.events = EPOLLIN;
 					event_cell.data.fd = port->sock;
 					if (epoll_ctl(thrinfo->thr_epoll_fd, EPOLL_CTL_ADD, port->sock,
 									&event_cell) == -1) {
+						GTMProxy_HandleDisconnect(cur_free_conn, thrinfo->thr_gtm_conn);
+						cur_free_conn->con_port = NULL;
 						elog(WARNING, "Failed to add sock to epoll file handle");
                         continue;
 					}
@@ -1476,7 +1480,9 @@ setjmp_again:
 						/*
 						 * Also disconnect if protocol error
 						 */
+            			GTM_MutexLockAcquire(&thrinfo->thr_lock);
                         thrinfo->thr_conn_count--;
+			            GTM_MutexLockRelease(&thrinfo->thr_lock);
 		                thrinfo->thr_conn->next = thrinfo->cur_free_conn_head;
 		                thrinfo->cur_free_conn_head = thrinfo->thr_conn;
 						GTMProxy_HandleDisconnect(thrinfo->thr_conn, thrinfo->thr_gtm_conn);
@@ -2731,8 +2737,10 @@ GTMProxy_HandleDisconnect(GTMProxy_ConnectionInfo *conninfo, GTM_Conn *gtm_conn)
 	if (gtmpqPutMsgStart('C', true, gtm_conn) ||
 		gtmpqPutnchar((char *)&proxyhdr, sizeof (GTM_ProxyMsgHeader), gtm_conn) ||
 		gtmpqPutInt(MSG_BACKEND_DISCONNECT, sizeof (GTM_MessageType), gtm_conn) ||
-		gtmpqPutc(conninfo->con_port->is_postmaster, gtm_conn))
-		elog(ERROR, "Error proxing data");
+		gtmpqPutc(conninfo->con_port->is_postmaster, gtm_conn)) {
+		elog(WARN, "Error proxing data");
+		goto Disconnect_end;
+	}
 
 	/*
 	 * Then send node type and node number if backend is a postmaster to
@@ -2743,13 +2751,18 @@ GTMProxy_HandleDisconnect(GTMProxy_ConnectionInfo *conninfo, GTM_Conn *gtm_conn)
 		namelen = strlen(conninfo->con_port->node_name);
 		if (gtmpqPutnchar((char *)&conninfo->con_port->remote_type, sizeof(GTM_PGXCNodeType), gtm_conn) ||
 		    gtmpqPutInt(namelen, sizeof (int), gtm_conn) ||
-		    gtmpqPutnchar(conninfo->con_port->node_name, namelen, gtm_conn) )
-			elog(ERROR, "Error proxing data");
+		    gtmpqPutnchar(conninfo->con_port->node_name, namelen, gtm_conn) ) {
+			elog(WARN, "Failed to proxy data");
+			goto Disconnect_end;
+		}
 	}
 
 	/* Finish the message. */
-	if (gtmpqPutMsgEnd(gtm_conn))
-		elog(ERROR, "Error finishing the message");
+	if (gtmpqPutMsgEnd(gtm_conn)) {
+		elog(WARN, "Failed to finish the message");
+	}
+
+Disconnect_end:
     conninfo.con_authenticated = false;
 	conninfo->con_disconnected = true;
 	if (conninfo->con_port->sock > 0)
@@ -2966,7 +2979,9 @@ GTMProxy_ProcessPendingCommands(GTMProxy_ThreadInfo *thrinfo)
 			epoll_ctl(thrinfo->thr_epoll_fd, EPOLL_CTL_DEL,
 						cmdinfo->ci_conn->con_port->sock, NULL); 
 		}
-		thrinfo->thr_conn_count--;
+		GTM_MutexLockAcquire(&thrinfo->thr_lock);
+        thrinfo->thr_conn_count--;
+		GTM_MutexLockRelease(&thrinfo->thr_lock);
 		GTMProxy_HandleDisconnect(cmdinfo->ci_conn, gtm_conn);
 		cmdinfo->ci_conn->next = thrinfo->cur_free_conn_head;
 		thrinfo->cur_free_conn_head = cmdinfo->ci_conn;

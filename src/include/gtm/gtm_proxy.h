@@ -160,7 +160,7 @@ void GTMProxy_ThreadExit(void);
 
 extern GTMProxy_ThreadInfo *GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx);
 extern GTMProxy_ThreadInfo * GTMProxy_GetThreadInfo(GTM_ThreadID thrid);
-extern GTMProxy_ThreadInfo *GTMProxy_ThreadAddConnection(Port *port);
+extern int *GTMProxy_ThreadAddConnection(Port *port);
 extern int GTMProxy_ThreadRemoveConnection(GTMProxy_ThreadInfo *thrinfo,
 		GTMProxy_ConnectionInfo *conninfo);
 
