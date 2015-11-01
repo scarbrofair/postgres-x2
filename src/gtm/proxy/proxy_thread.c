@@ -163,7 +163,6 @@ GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx)
 	}
 	(thrinfo->thr_all_conns[GTM_PROXY_MAX_CONNECTIONS-1]).next = NULL;
 	thrinfo->thr_new_conns = NULL;
-	thrinfo->thr_pri_new_conns = NULL;
 	thrinfo->copy_new_conns = false;
 	/*
 	 * Install the ThreadInfo structure in the global array. We do this before
@@ -381,19 +380,15 @@ GTMProxy_ThreadAddConnection(Port *port)
 			continue;
 		}
 
-		if (thrinfo->copy_new_conns && thrinfo->thr_new_conns != NULL) {
-			gtm_list_free(thrinfo->thr_new_conns);
-			thrinfo->thr_new_conns = NULL;
+		if (thrinfo->copy_new_conns) {
+			if (thrinfo->thr_new_conns != NULL) {
+				gtm_list_free(thrinfo->thr_new_conns);
+				thrinfo->thr_new_conns = NULL;
+			}
 			thrinfo->copy_new_conns = false;
 		}
-
+		elog(WARNING, "Asign %d socket to thread %d", port->sock, GTMProxyThreads->gt_next_worker);
 		thrinfo->thr_new_conns =  gtm_lappend(thrinfo->thr_new_conns, port);
-		/*
- 		 * Now increment the seqno since a new connection is added to the array.
-		 * Before we do the next poll(), the fd array will be forced to be
-		 * reconstructed.
-		 */
-		thrinfo->thr_seqno++;
 
 		/*
 		 * Signal the worker thread if its waiting for connections to be added to
@@ -405,15 +400,12 @@ GTMProxy_ThreadAddConnection(Port *port)
 		 */
 		GTM_CVBcast(&thrinfo->thr_cv);
 		GTM_MutexLockRelease(&thrinfo->thr_lock);
+		return STATUS_OK;
 	}
 
-	if (try_count != GTMProxyThreads->gt_thread_count) {
-		return STATUS_OK;
-	} else { 
-		// There is no work thread available
-		elog(WARN, "Fail to assign client to a worker thread");
-		return STATUS_ERROR;
-	}
+	// There is no work thread available
+	elog(WARNING, "Fail to assign client to a worker thread");
+	return STATUS_ERROR;
 }
 
 /*
@@ -422,73 +414,6 @@ GTMProxy_ThreadAddConnection(Port *port)
 int
 GTMProxy_ThreadRemoveConnection(GTMProxy_ThreadInfo *thrinfo, GTMProxy_ConnectionInfo *conninfo)
 {
-	int ii;
-
-	/*
-	 * Lock the threadninfo structure to safely remove the connection from the
-	 * thread structure.
-	 */
-	/*GTM_MutexLockAcquire(&thrinfo->thr_lock);
-
-	for (ii = 0; ii < thrinfo->thr_conn_count; ii++)
-	{
-		if (thrinfo->thr_all_conns[ii] == conninfo)
-			break;
-	}
-
-	if (ii >= thrinfo->thr_conn_count)
-	{
-		GTM_MutexLockRelease(&thrinfo->thr_lock);
-		elog(ERROR, "No such connection");
-	}
-
-	thrinfo->thr_any_backup[ii] = FALSE;
-	thrinfo->thr_qtype[ii] = 0;
-	resetStringInfo(&(thrinfo->thr_inBufData[ii]));
-
-	if (conninfo->con_id != InvalidGTMProxyConnID)
-	{
-		thrinfo->thr_conid2idx[conninfo->con_id] = -1;
-		elog(DEBUG5, "Released connection id %d", conninfo->con_id);
-	}
-*/
-	/*
-	 * If this is the last entry in the array ? If not, then copy the last
-	 * entry in this slot and mark the last slot an empty
-	 */
-/*	if ((ii + 1) < thrinfo->thr_conn_count)
-	{
-		GTMProxy_ConnectionInfo *ci_moved;
-		int last_idx;
-*/
-		/* Pick up last slot */
-//		last_idx = thrinfo->thr_conn_count - 1;
-//		ci_moved = thrinfo->thr_all_conns[last_idx];
-		
-		/* Copy the last entry in this slot */
-//		thrinfo->thr_all_conns[ii] = ci_moved;
-
-		/* Mark the last slot free */
-//		thrinfo->thr_all_conns[last_idx] = NULL;
-
-		/* Adjust the mapping to reflect the current slot in the array */
-//		if (ci_moved->con_id != InvalidGTMProxyConnID)
-//			thrinfo->thr_conid2idx[ci_moved->con_id] = ii;
-//	}
-//	else
-//	{
-		/* This is the last entry in the array. Just mark it free */
-//		thrinfo->thr_all_conns[ii] = NULL;
-//	}
-
-//	thrinfo->thr_conn_count--;
-
-	/*
-	 * Increment the seqno to ensure that the next time before we poll, the fd
-	 * array is reconstructed.
-	 */
-//	thrinfo->thr_seqno++;
-//	GTM_MutexLockRelease(&thrinfo->thr_lock);
 
 	return 0;
 }

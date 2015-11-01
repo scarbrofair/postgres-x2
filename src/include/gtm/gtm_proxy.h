@@ -115,12 +115,9 @@ typedef struct GTMProxy_ThreadInfo
 
 	/* connection array */
 	GTMProxy_ConnectionInfo	thr_all_conns[GTM_PROXY_MAX_CONNECTIONS];
-	GTMProxy_ConnectionInfo					*cur_free_conn_head;
+	GTMProxy_ConnectionInfo	*cur_free_conn_head;
 	int						thr_epoll_fd;
-	//struct pollfd			thr_poll_fds[GTM_PROXY_MAX_CONNECTIONS];
     GTM_ConnHashBucket		GTM_ConnHTable[GTM_PROXY_MAX_CONNECTIONS];
-	/* map info from ConnectionInfo->con_id to array index of thr_all_conns */
-	//int16					thr_conid2idx[GTM_PROXY_MAX_CONNECTIONS];
 
 	/* Command backup */
 	short					thr_any_backup[GTM_PROXY_MAX_CONNECTIONS];
@@ -160,7 +157,7 @@ void GTMProxy_ThreadExit(void);
 
 extern GTMProxy_ThreadInfo *GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx);
 extern GTMProxy_ThreadInfo * GTMProxy_GetThreadInfo(GTM_ThreadID thrid);
-extern int *GTMProxy_ThreadAddConnection(Port *port);
+extern int GTMProxy_ThreadAddConnection(Port *port);
 extern int GTMProxy_ThreadRemoveConnection(GTMProxy_ThreadInfo *thrinfo,
 		GTMProxy_ConnectionInfo *conninfo);
 
