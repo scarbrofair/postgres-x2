@@ -1581,11 +1581,12 @@ static int
 pgxc_remove_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 {
 	Assert(conninfo->con_port != NULL);
+	MemoryContext old = MemoryContextSwitchTo(TopMemoryContext);
 	uint32 hash = (conninfo->con_port->sock)%GTM_PROXY_MAX_CONNECTIONS;
 	GTM_ConnHashBucket *bucket = &HTable[hash];
 	bucket->nhb_list = gtm_list_delete(bucket->nhb_list, conninfo);
 	elog(WARNING, " Remove socket %d of item %p from hash table", conninfo->con_port->sock, conninfo->con_port);
-
+    MemoryContextSwitchTo(old);
     return 0;
 }
 
@@ -1600,6 +1601,8 @@ pgxc_add_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 	GTM_ConnHashBucket *bucket = &HTable[hash];
 	gtm_ListCell *elem;
 	GTMProxy_ConnectionInfo *curr_conninfo = NULL;
+	MemoryContext old;
+
 	elog(WARNING, " Add socket %d of item %p to hash table", conninfo->con_port->sock, conninfo->con_port);
 
 	gtm_foreach(elem, bucket->nhb_list)
@@ -1615,8 +1618,9 @@ pgxc_add_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 		}
 	}
 
+	old = MemoryContextSwitchTo(TopMemoryContext);
 	bucket->nhb_list = gtm_lappend(bucket->nhb_list, conninfo);
-
+	MemoryContextSwitchTo(old);
 	return 0;
 }
 
