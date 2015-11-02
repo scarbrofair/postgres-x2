@@ -163,7 +163,6 @@ GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx)
 	}
 	(thrinfo->thr_all_conns[GTM_PROXY_MAX_CONNECTIONS-1]).next = NULL;
 	thrinfo->thr_new_conns = NULL;
-	thrinfo->copy_new_conns = false;
 	/*
 	 * Install the ThreadInfo structure in the global array. We do this before
 	 * starting the thread
@@ -380,13 +379,6 @@ GTMProxy_ThreadAddConnection(Port *port)
 			continue;
 		}
 
-		if (thrinfo->copy_new_conns) {
-			if (thrinfo->thr_new_conns != NULL) {
-				gtm_list_free(thrinfo->thr_new_conns);
-				thrinfo->thr_new_conns = NULL;
-			}
-			thrinfo->copy_new_conns = false;
-		}
 		elog(WARNING, "Asign %d socket to thread %d", port->sock, GTMProxyThreads->gt_next_worker);
 		thrinfo->thr_new_conns =  gtm_lappend(thrinfo->thr_new_conns, port);
 

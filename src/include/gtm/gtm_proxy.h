@@ -129,8 +129,6 @@ typedef struct GTMProxy_ThreadInfo
 	/* New conns, but belong to the master thread memcontext*/
 	gtm_List 					*thr_new_conns; 
 	GTM_Conn				*thr_gtm_conn;		/* Connection to GTM */
-	/* Did the thread copy the new conns to its own list?*/
-	bool					copy_new_conns;
 	/* Reconnect Info */
 	int						can_accept_SIGUSR2;
 	int						reconnect_issued;
