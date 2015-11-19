@@ -950,10 +950,25 @@ ConnFree(Port *conn)
 static int
 ServerLoop(void)
 {
-	fd_set		readmask;
 	int			nSockets;
+	int			epoll_fd;
+	int			i;
+	struct epoll_event event_cell, event_set[GTM_PROXY_MAX_CONNECTIONS];
 
-	nSockets = initMasks(&readmask);
+    epoll_fd = epoll_create(GTM_PROXY_MAX_CONNECTIONS);
+    event_cell.events = EPOLLIN;
+	for (i = 0; i < MAXLISTEN; i++)
+	{
+		if (ListenSocket[i] == -1)
+			break;
+
+        event_cell.data.fd = ListenSocket[i];
+		if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ListenSocket[i],
+						&event_cell) == -1) {
+			elog(ERROR, "Main Thread failed to add socket to epoll fd.");
+		}
+
+	}
 
 	for (;;)
 	{
@@ -993,7 +1008,7 @@ ServerLoop(void)
 		 * Wait at most one minute, to ensure that the other background
 		 * tasks handled below get done even when no requests are arriving.
 		 */
-		memcpy((char *) &rmask, (char *) &readmask, sizeof(fd_set));
+		//memcpy((char *) &rmask, (char *) &readmask, sizeof(fd_set));
 
 		PG_SETMASK(&UnBlockSig);
 
@@ -1008,13 +1023,8 @@ ServerLoop(void)
 		}
 
 		{
-			/* must set timeout each time; some OSes change it! */
-			struct timeval timeout;
+			selres = epoll_wait(epoll_fd, event_set, GTM_PROXY_MAX_CONNECTIONS, 100000);
 
-			timeout.tv_sec = 60;
-			timeout.tv_usec = 0;
-
-			selres = select(nSockets, &rmask, NULL, NULL, &timeout);
 		}
 
 		/*
@@ -1041,28 +1051,21 @@ ServerLoop(void)
 		 */
 		if (selres > 0)
 		{
-			int			i;
-
-			for (i = 0; i < MAXLISTEN; i++)
+			for (i = 0; i < selres; i++)
 			{
-				if (ListenSocket[i] == -1)
-					break;
-				if (FD_ISSET(ListenSocket[i], &rmask))
-				{
-					Port	   *port;
+				Port	   *port;
 
-					port = ConnCreate(ListenSocket[i]);
-					if (port)
+				port = ConnCreate(event_set[i].data.fd);
+				if (port)
+				{
+					if (GTMProxyAddConnection(port) != STATUS_OK)
 					{
-						if (GTMProxyAddConnection(port) != STATUS_OK)
-						{
-							StreamClose(port->sock);
-							ConnFree(port);
-							elog(WARNING, "Too many connections and free port");
-						}
+						StreamClose(port->sock);
+						ConnFree(port);
+						elog(WARNING, "Too many connections and free port");
 					}
-				}
-			}
+			    }
+            }
 		}
 	}
 }
