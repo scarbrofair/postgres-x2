@@ -134,18 +134,15 @@ GTMProxy_ThreadCreate(void *(* startroutine)(void *), int idx)
 	GTMProxy_ThreadInfo *thrinfo;
 	int err, i;
 
-
 	/*
 	 * We are still running in the context of the main thread. So the
 	 * allocation below would last as long as the main thread exists or the
 	 * memory is explicitely freed.
 	 */
 	thrinfo = (GTMProxy_ThreadInfo *)palloc0(sizeof (GTMProxy_ThreadInfo));
+
 	GTM_MutexLockInit(&thrinfo->thr_lock);
 	GTM_CVInit(&thrinfo->thr_cv);
-
-	/* Initialize mapping to be unassigned. */
-	//memset(thrinfo->thr_conid2idx, 0xff, sizeof(thrinfo->thr_conid2idx));
 
 	/*
 	 * Initialize communication area with SIGUSR2 signal handler (reconnect)

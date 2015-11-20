@@ -49,7 +49,7 @@ typedef struct GTMProxy_ConnectionInfo
 	GTM_MessageType			con_pending_msg;
 	GlobalTransactionId 		con_txid;
 	GTM_TransactionHandle		con_handle;
-	struct GTMProxy_ConnectionInfo *next;
+	struct GTMProxy_ConnectionInfo  *next;
 } GTMProxy_ConnectionInfo;
 
 typedef struct GTMProxy_Connections
@@ -62,7 +62,7 @@ typedef struct GTMProxy_Connections
 
 typedef struct GTM_ConnHashBucket
 {
-	gtm_List        *nhb_list;
+    gtm_List    *nhb_list;
 } GTM_ConnHashBucket;
 
 #define ERRORDATA_STACK_SIZE  20
@@ -116,7 +116,7 @@ typedef struct GTMProxy_ThreadInfo
 	/* connection array */
 	GTMProxy_ConnectionInfo	thr_all_conns[GTM_PROXY_MAX_CONNECTIONS];
 	GTMProxy_ConnectionInfo	*cur_free_conn_head;
-	int						thr_epoll_fd;
+	int                     thr_epoll_fd;
     GTM_ConnHashBucket		GTM_ConnHTable[GTM_PROXY_MAX_CONNECTIONS];
 
 	/* Command backup */
@@ -126,8 +126,7 @@ typedef struct GTMProxy_ThreadInfo
 
 	gtm_List 					*thr_processed_commands;
 	gtm_List 					*thr_pending_commands[MSG_TYPE_COUNT];
-	/* New conns, but belong to the master thread memcontext*/
-	gtm_List 					*thr_new_conns; 
+    gtm_List 					*thr_new_conns; /* New conns */
 	GTM_Conn				*thr_gtm_conn;		/* Connection to GTM */
 	/* Reconnect Info */
 	int						can_accept_SIGUSR2;

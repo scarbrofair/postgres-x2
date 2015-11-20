@@ -17,7 +17,6 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/socket.h>
-//#include <sys/select.h>
 #include <sys/epoll.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -121,6 +120,7 @@ pthread_key_t	threadinfo_key;
 static bool		GTMProxyAbortPending = false;
 static GTM_Conn *master_conn;
 
+
 /*
  * External Routines
  */
@@ -133,7 +133,6 @@ extern void InitializeGTMOptions(void);
 static Port *ConnCreate(int serverFd);
 static void ConnFree(Port *conn);
 static int ServerLoop(void);
-static int initMasks(fd_set *rmask);
 void *GTMProxy_ThreadMain(void *argp);
 static int GTMProxyAddConnection(Port *port);
 static GTMProxy_ConnectionInfo *GTMProxy_GetConnInfo(GTMProxy_ThreadInfo *thrinfo,
@@ -195,8 +194,7 @@ static int pgxc_remove_conn(GTM_ConnHashBucket *HTable,
 							GTMProxy_ConnectionInfo *conninfo);
 
 static int pgxc_add_conn(GTM_ConnHashBucket *HTable,
-							GTMProxy_ConnectionInfo *conninfo);
-
+						GTMProxy_ConnectionInfo *conninfo);
 
 /*
  * One-time initialization. It's called immediately after the main process
@@ -929,7 +927,7 @@ ConnCreate(int serverFd)
 		ConnFree(port);
 		port = NULL;
 	}
-	elog(WARNING, "Main thread get a new socket :%d", port->sock);
+
 	port->conn_id = InvalidGTMProxyConnID;
 
 	return port;
@@ -950,29 +948,26 @@ ConnFree(Port *conn)
 static int
 ServerLoop(void)
 {
-	int			nSockets;
-	int			epoll_fd;
-	int			i;
-	struct epoll_event event_cell, event_set[GTM_PROXY_MAX_CONNECTIONS];
+	int		epoll_fd, i;
+	struct	epoll_event event_cell,
+			event_set[GTM_PROXY_MAX_CONNECTIONS];
 
-    epoll_fd = epoll_create(GTM_PROXY_MAX_CONNECTIONS);
-    event_cell.events = EPOLLIN;
+	epoll_fd = epoll_create(GTM_PROXY_MAX_CONNECTIONS);
+	event_cell.events = EPOLLIN;
 	for (i = 0; i < MAXLISTEN; i++)
 	{
 		if (ListenSocket[i] == -1)
 			break;
 
-        event_cell.data.fd = ListenSocket[i];
+		event_cell.data.fd = ListenSocket[i];
 		if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ListenSocket[i],
 						&event_cell) == -1) {
 			elog(ERROR, "Main Thread failed to add socket to epoll fd.");
 		}
-
 	}
 
 	for (;;)
 	{
-		fd_set		rmask;
 		int			selres;
 
 		if (sigsetjmp(mainThreadSIGUSR1_buf, 1) != 0)
@@ -1024,7 +1019,6 @@ ServerLoop(void)
 
 		{
 			selres = epoll_wait(epoll_fd, event_set, GTM_PROXY_MAX_CONNECTIONS, 100000);
-
 		}
 
 		/*
@@ -1071,32 +1065,6 @@ ServerLoop(void)
 }
 
 /*
- * Initialise the masks for select() for the ports we are listening on.
- * Return the number of sockets to listen on.
- */
-static int
-initMasks(fd_set *rmask)
-{
-	int			maxsock = -1;
-	int			i;
-
-	FD_ZERO(rmask);
-
-	for (i = 0; i < MAXLISTEN; i++)
-	{
-		int			fd = ListenSocket[i];
-
-		if (fd == -1)
-			break;
-		FD_SET(fd, rmask);
-		if (fd > maxsock)
-			maxsock = fd;
-	}
-
-	return maxsock + 1;
-}
-
-/*
  * The main worker thread routine
  */
 void *
@@ -1106,13 +1074,11 @@ GTMProxy_ThreadMain(void *argp)
 	int qtype;
 	StringInfoData input_message;
 	sigjmp_buf  local_sigjmp_buf;
-	int32 saved_seqno = -1;
 	int ii, nrfds;
 	char gtm_connect_string[1024];
 	int	first_turn = TRUE;	/* Used only to set longjmp target at the first turn of thread loop */
 	GTMProxy_CommandData cmd_data = {};
 	struct epoll_event event_cell, event_set[GTM_PROXY_MAX_CONNECTIONS];
-    //GTM_ConnHashBucket GTM_ConnHTable[GTM_PROXY_MAX_CONNECTIONS];
 	elog(DEBUG3, "Starting the connection helper thread");
 
 	/*
@@ -1163,8 +1129,8 @@ GTMProxy_ThreadMain(void *argp)
 	{
 		thrinfo->thr_any_backup[ii] = FALSE;
 		thrinfo->thr_qtype[ii] = 0;
-        thrinfo->thr_all_conns[ii].con_id = ii;
-        thrinfo->thr_all_conns[ii].con_disconnected = true;
+		thrinfo->thr_all_conns[ii].con_id = ii;
+		thrinfo->thr_all_conns[ii].con_disconnected = true;
 		thrinfo->thr_all_conns[ii].con_authenticated = false; 
 		initStringInfo(&(thrinfo->thr_inBufData[ii]));
 	}
@@ -1258,7 +1224,7 @@ GTMProxy_ThreadMain(void *argp)
 		MemoryContextResetAndDeleteChildren(MessageContext);
 
 		/*
-		 * The following block should be skipped at the first turn .
+		 * The following block should be skipped at the first turn.
 		 */
 		if (!first_turn)
 		{
@@ -1435,14 +1401,12 @@ setjmp_again:
 			}
 
 			if ((thrinfo->thr_any_backup[conninfo->con_id]) ||
-				(event_set[ii].events  & EPOLLIN))
+				(event_set[ii].events & EPOLLIN))
 			{
 				/*
 				 * (3) read a command (loop blocks here)
 				 */
 				qtype = ReadCommand(thrinfo->thr_conn, &input_message);
-
-				//thrinfo->thr_poll_fds[ii].revents = 0;
 
 				switch(qtype)
 				{
@@ -1472,7 +1436,7 @@ setjmp_again:
 						 * Also disconnect if protocol error
 						 */
             			GTM_MutexLockAcquire(&thrinfo->thr_lock);
-                        thrinfo->thr_conn_count--;
+						thrinfo->thr_conn_count--;
 						GTM_MutexLockRelease(&thrinfo->thr_lock);
 						thrinfo->thr_conn->next = thrinfo->cur_free_conn_head;
 						thrinfo->cur_free_conn_head = thrinfo->thr_conn;
@@ -1570,10 +1534,13 @@ setjmp_again:
 static GTMProxy_ConnectionInfo *
 pgxc_find_conn(GTM_ConnHashBucket *HTable, int socket)
 {
-	uint32 hash = socket%GTM_PROXY_MAX_CONNECTIONS;
-	GTM_ConnHashBucket *bucket = &HTable[hash];
-	gtm_ListCell *elem;
-	GTMProxy_ConnectionInfo *conninfo = NULL;
+	uint32					hash;
+	GTM_ConnHashBucket		*bucket;
+	gtm_ListCell 			*elem;
+	GTMProxy_ConnectionInfo *conninfo;
+
+	hash = socket % GTM_PROXY_MAX_CONNECTIONS;
+	bucket = &HTable[hash];
 
 	gtm_foreach(elem, bucket->nhb_list)
 	{
@@ -1591,11 +1558,14 @@ pgxc_find_conn(GTM_ConnHashBucket *HTable, int socket)
 static int
 pgxc_remove_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 {
+	uint32				hash;
+	GTM_ConnHashBucket	*bucket; 
+
 	Assert(conninfo->con_port != NULL);
-	uint32 hash = (conninfo->con_port->sock)%GTM_PROXY_MAX_CONNECTIONS;
-	GTM_ConnHashBucket *bucket = &HTable[hash];
+	hash = (conninfo->con_port->sock) % GTM_PROXY_MAX_CONNECTIONS;
+	bucket = &HTable[hash];
 	bucket->nhb_list = gtm_list_delete(bucket->nhb_list, conninfo);
-    return 0;
+	return 0;
 }
 
 /*
@@ -1604,12 +1574,15 @@ pgxc_remove_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 static int
 pgxc_add_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 {
+	uint32 					hash; 
+	gtm_ListCell 			*elem;
+	MemoryContext 			old;
+	GTMProxy_ConnectionInfo *curr_conninfo;
+	GTM_ConnHashBucket 		*bucket
+
 	Assert(conninfo->con_port != NULL);
-	uint32 hash = (conninfo->con_port->sock)%GTM_PROXY_MAX_CONNECTIONS;
-	GTM_ConnHashBucket *bucket = &HTable[hash];
-	gtm_ListCell *elem;
-	GTMProxy_ConnectionInfo *curr_conninfo = NULL;
-	MemoryContext old;
+	hash = (conninfo->con_port->sock) % GTM_PROXY_MAX_CONNECTIONS;
+	bucket = &HTable[hash];
 
 	gtm_foreach(elem, bucket->nhb_list)
 	{
@@ -1624,7 +1597,9 @@ pgxc_add_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 		}
 	}
 	old = MemoryContextSwitchTo(TopMemoryContext);
-    // Save conninfo in TopMemoryConext, since MessageMemoryConext will reset every loop
+	/* Save conninfo in TopMemoryConext, since MessageMemoryConext 
+ 	 * will reset every loop
+ 	 */
 	bucket->nhb_list = gtm_lappend(bucket->nhb_list, conninfo);
 	MemoryContextSwitchTo(old);
 	return 0;
@@ -1637,24 +1612,6 @@ pgxc_add_conn(GTM_ConnHashBucket *HTable, GTMProxy_ConnectionInfo *conninfo)
 static int
 GTMProxyAddConnection(Port *port)
 {
-	//GTMProxy_ConnectionInfo *conninfo = NULL;
-
-	/*conninfo = (GTMProxy_ConnectionInfo *)palloc0(sizeof (GTMProxy_ConnectionInfo));
-
-	if (conninfo == NULL)
-	{
-		ereport(ERROR,
-				(ENOMEM,
-					errmsg("Out of memory")));
-		return STATUS_ERROR;
-	}
-
-	elog(DEBUG3, "Started new connection");
-	conninfo->con_port = port;
-	*/
-	/*
-	 * Add the conninfo struct to the next worker thread in round-robin manner
-	 */
 	return GTMProxy_ThreadAddConnection(port);
 }
 
@@ -1808,8 +1765,6 @@ static GTM_Conn *
 HandlePostCommand(GTMProxy_ConnectionInfo *conninfo, GTM_Conn *gtm_conn)
 {
 	int connIdx = conninfo->con_id;
-
-	//connIdx = GTMProxy_GetConnInfoIndex(GetMyThreadInfo, conninfo->con_id);
 
 	Assert(conninfo && gtm_conn);
 	/*
@@ -2000,7 +1955,6 @@ ProcessResponse(GTMProxy_ThreadInfo *thrinfo, GTMProxy_CommandInfo *cmdinfo,
 				ReleaseCmdBackup(cmdinfo);
 				ereport(ERROR2, (EINVAL, errmsg("snapshot request failed")));
 			}
-			elog(WARNING, "Sent snapshot of xid %d  to  socket %d ", cmdinfo->ci_data.cd_snap.gxid, cmdinfo->ci_conn->con_port->sock);
 
 			cmdinfo->ci_conn->con_pending_msg = MSG_TYPE_INVALID;
 			ReleaseCmdBackup(cmdinfo);
@@ -2107,10 +2061,10 @@ static int
 ReadCommand(GTMProxy_ConnectionInfo *conninfo, StringInfo inBuf)
 {
 	int 			qtype;
-	int				connIdx = conninfo->con_id;
+	int				connIdx;
 	int				anyBackup;
 
-	//connIdx = GTMProxy_GetConnInfoIndex(GetMyThreadInfo, conninfo->con_id);
+	connIdx = conninfo->con_id;
 	anyBackup = (GetMyThreadInfo->thr_any_backup[connIdx] ? TRUE : FALSE);
 
 	/*
@@ -2359,7 +2313,6 @@ ProcessTransactionCommand(GTMProxy_ConnectionInfo *conninfo, GTM_Conn *gtm_conn,
 
 		case MSG_TXN_COMMIT:
 		case MSG_TXN_ROLLBACK:	
-
 			cmd_data.cd_rc.isgxid = pq_getmsgbyte(message);
 			if (cmd_data.cd_rc.isgxid)
 			{
@@ -2395,8 +2348,6 @@ ProcessTransactionCommand(GTMProxy_ConnectionInfo *conninfo, GTM_Conn *gtm_conn,
 		case MSG_TXN_START_PREPARED:
 		case MSG_TXN_GET_GID_DATA:
 		case MSG_TXN_COMMIT_PREPARED:
-
-
 			GTMProxy_ProxyCommand(conninfo, gtm_conn, mtype, message);
 			break;
 
@@ -2704,7 +2655,7 @@ GTMProxy_HandshakeConnection(GTMProxy_ConnectionInfo *conninfo)
 	conninfo->con_authenticated = true;
 
 	elog(DEBUG3, "Sent connection authentication message to the client");
-    return STATUS_OK;
+	return STATUS_OK;
 }
 
 static void
@@ -2751,13 +2702,14 @@ GTMProxy_HandleDisconnect(GTMProxy_ConnectionInfo *conninfo, GTM_Conn *gtm_conn)
 	}
 
 Disconnect_end:
-    conninfo->con_authenticated = false;
+	conninfo->con_authenticated = false;
 	conninfo->con_disconnected = true;
 	if (conninfo->con_port->sock > 0)
 		StreamClose(conninfo->con_port->sock);
-	elog(WARNING, "Free port of %p by worker thread", conninfo->con_port);
+
 	ConnFree(conninfo->con_port);
 	conninfo->con_port = NULL;
+
 	return;
 }
 
@@ -2812,7 +2764,6 @@ GTMProxy_ProcessPendingCommands(GTMProxy_ThreadInfo *thrinfo)
 						elog(ERROR, "Error sending data");
 
 				}
-				elog(WARNING, "Proxy XID message ");
 
 				/* Finish the message. */
 				Enable_Longjmp();
