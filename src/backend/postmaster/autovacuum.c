@@ -1576,6 +1576,11 @@ AutoVacWorkerMain(int argc, char *argv[])
 	 */
 	if (sigsetjmp(local_sigjmp_buf, 1) != 0)
 	{
+#ifdef PGXC
+		if (got_SIGTERM)
+			goto AutoVacEnd;
+#endif
+
 		/* Prevents interrupts while cleaning up */
 		HOLD_INTERRUPTS();
 
@@ -1703,6 +1708,9 @@ AutoVacWorkerMain(int argc, char *argv[])
 		do_autovacuum();
 	}
 
+#ifdef PGXC
+AutoVacEnd:
+#endif
 	/*
 	 * The launcher will be notified of my death in ProcKill, *if* we managed
 	 * to get a worker slot at all
