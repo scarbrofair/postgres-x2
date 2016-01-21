@@ -9003,6 +9003,7 @@ ExplainableStmt:
 			| CreateAsStmt
 			| CreateMatViewStmt
 			| RefreshMatViewStmt
+			| ExecDirectStmt
 			| ExecuteStmt					/* by default all are $$=$1 */
 		;
 
