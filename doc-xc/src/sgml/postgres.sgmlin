@@ -187,8 +187,6 @@
   &diskusage;
   &wal;
   &regress;
-  &add-node;
-  &remove-node;
 
  </part>
 
