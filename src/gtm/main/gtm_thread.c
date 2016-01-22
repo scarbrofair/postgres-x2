@@ -48,8 +48,11 @@ GTM_ThreadAdd(GTM_ThreadInfo *thrinfo)
 		 * TODO Optimize lock management by not holding any locks during memory
 		 * allocation.
 		 */
-		if (GTMThreads->gt_array_size == GTM_MAX_THREADS)
-			elog(ERROR, "Too many threads active");
+		if (GTMThreads->gt_array_size == GTM_MAX_THREADS) {
+			elog(WARNING, "Too many threads active");
+			GTM_RWLockRelease(&GTMThreads->gt_lock);
+			return -1;
+		}
 
 		if (GTMThreads->gt_array_size == 0)
 			newsize = GTM_MIN_THREADS;
@@ -116,17 +119,20 @@ GTM_ThreadRemove(GTM_ThreadInfo *thrinfo)
 	for (ii = 0; ii < GTMThreads->gt_array_size; ii++)
 	{
 		if (GTMThreads->gt_threads[ii] == thrinfo)
+		{
+			GTMThreads->gt_threads[ii] = NULL;
+			GTMThreads->gt_thread_count--;
 			break;
+		}
 	}
 
-	if (ii == GTMThreads->gt_array_size)
-		elog(ERROR, "Thread (%p) not found ", thrinfo);
-
-	GTMThreads->gt_threads[ii] = NULL;
-	GTMThreads->gt_thread_count--;
 	GTM_RWLockRelease(&GTMThreads->gt_lock);
 
-	pfree(thrinfo);
+	/*
+	 * It is dangerous to free invalid thrinfo, not found in GTMThreads.
+	 */
+	if (ii < GTMThreads->gt_array_size)
+		pfree(thrinfo);
 
 	return 0;
 }
@@ -167,8 +173,11 @@ GTM_ThreadCreate(GTM_ConnectionInfo *conninfo,
 	 * Install the ThreadInfo structure in the global array. We do this before
 	 * starting the thread
 	 */
-	if (GTM_ThreadAdd(thrinfo) == -1)
-		elog(ERROR, "Error starting a new thread");
+	if (GTM_ThreadAdd(thrinfo) == -1) {
+		pfree(thrinfo);
+		elog(WARNING, "Error starting a new thread");
+		return NULL;
+	}
 
 	/*
 	 * Set up memory contextes before actually starting the threads
