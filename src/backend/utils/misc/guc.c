@@ -67,6 +67,7 @@
 #include "pgxc/nodemgr.h"
 #include "pgxc/pgxcnode.h"
 #include "pgxc/xc_maintenance_mode.h"
+#include "pgxc/xc_gtm_commit_sync.h"
 #endif
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker.h"
@@ -851,6 +852,15 @@ static struct config_bool ConfigureNamesBool[] =
 			NULL
 		},
 		&gtm_backup_barrier,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"xc_gtm_commit_sync_test", PGC_USERSET, STATS_MONITORING,
+			gettext_noop("Prints additional status info on GTM commit syncronization."),
+			NULL
+		},
+		&xc_gtm_commit_sync_test,
 		false,
 		NULL, NULL, NULL
 	},
@@ -2195,7 +2205,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_XBLOCKS
 		},
 		&XLOGbuffers,
-		-1, -1, INT_MAX,
+		-1, -1, (INT_MAX / XLOG_BLCKSZ),
 		check_wal_buffers, NULL, NULL
 	},
 
@@ -2469,17 +2479,17 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_freeze_max_age,
 		/* see pg_resetxlog if you change the upper-limit value */
-		200000000, 100000000, 2000000000,
+		200000000, 100000, 2000000000,
 		NULL, NULL, NULL
 	},
 	{
-		/* see varsup.c for why this is PGC_POSTMASTER not PGC_SIGHUP */
+		/* see multixact.c for why this is PGC_POSTMASTER not PGC_SIGHUP */
 		{"autovacuum_multixact_freeze_max_age", PGC_POSTMASTER, AUTOVACUUM,
 			gettext_noop("Multixact age at which to autovacuum a table to prevent multixact wraparound."),
 			NULL
 		},
 		&autovacuum_multixact_freeze_max_age,
-		400000000, 10000000, 2000000000,
+		400000000, 10000, 2000000000,
 		NULL, NULL, NULL
 	},
 	{
@@ -2522,7 +2532,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_KB,
 		},
 		&ssl_renegotiation_limit,
-		512 * 1024, 0, MAX_KILOBYTES,
+		0, 0, MAX_KILOBYTES,
 		NULL, NULL, NULL
 	},
 
@@ -2666,6 +2676,16 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&pgxcnode_cancel_delay,
 		10, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+	{
+		{"xc_gtm_sync_timeout", PGC_USERSET, DATA_NODES,
+			gettext_noop("Timeout to synchronize commit report to GTM"),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&xc_gtm_sync_timeout,
+		2000, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 #endif
