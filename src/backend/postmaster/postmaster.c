@@ -1551,9 +1551,9 @@ DetermineSleepTime(struct timeval * timeout)
 	{
 		if (AbortStartTime > 0)
 		{
-			/* remaining time, but at least 1 second */
-			timeout->tv_sec = Min(SIGKILL_CHILDREN_AFTER_SECS -
-								  (time(NULL) - AbortStartTime), 1);
+			/* remaining time, but at least 0 second */
+			timeout->tv_sec = Max(SIGKILL_CHILDREN_AFTER_SECS -
+								  (time(NULL) - AbortStartTime), 0);
 			timeout->tv_usec = 0;
 		}
 		else
@@ -3730,6 +3730,7 @@ PostmasterStateMachine(void)
 		StartupPID = StartupDataBase();
 		Assert(StartupPID != 0);
 		pmState = PM_STARTUP;
+		AbortStartTime = 0;
 	}
 }
 
