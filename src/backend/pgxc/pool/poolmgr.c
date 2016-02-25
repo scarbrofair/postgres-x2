@@ -1199,7 +1199,11 @@ agent_handle_input(PoolAgent * agent, StringInfo s)
 				list_free(datanodelist);
 				list_free(coordlist);
 
-				pool_sendfds(&agent->port, fds, fds ? datanodecount + coordcount : 0);
+				if (pool_sendfds(&agent->port, fds, fds ? datanodecount + coordcount : 0)) {
+					// In error case, destory the agent
+					agent_destroy(agent); 
+				}
+
 				if (fds)
 					pfree(fds);
 				break;

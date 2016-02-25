@@ -481,6 +481,7 @@ pool_putmessage(PoolPort *port, char msgtype, const char *s, size_t len)
 /* message code('s'), result */
 #define SEND_RES_BUFFER_SIZE 5
 #define SEND_PID_BUFFER_SIZE (5 + (MaxConnections - 1) * 4)
+#define SEND_MAX_FD 255
 
 /*
  * Build up a message carrying file descriptors or process numbers and send them over specified
@@ -493,14 +494,15 @@ pool_sendfds(PoolPort *port, int *fds, int count)
 	struct msghdr msg;
 	char		buf[SEND_MSG_BUFFER_SIZE];
 	uint		n32;
-	int			controllen = sizeof(struct cmsghdr) + count * sizeof(int);
+	int			controllen = 
+							sizeof(struct cmsghdr) + SEND_MAX_FD * sizeof(int);
 	struct cmsghdr *cmptr = NULL;
+	uint32			cur_count = 0;
+	uint32			sent_count = 0;
 
 	buf[0] = 'f';
 	n32 = htonl((uint32) 8);
 	memcpy(buf + 1, &n32, 4);
-	n32 = htonl((uint32) count);
-	memcpy(buf + 5, &n32, 4);
 
 	iov[0].iov_base = buf;
 	iov[0].iov_len = SEND_MSG_BUFFER_SIZE;
@@ -508,30 +510,49 @@ pool_sendfds(PoolPort *port, int *fds, int count)
 	msg.msg_iovlen = 1;
 	msg.msg_name = NULL;
 	msg.msg_namelen = 0;
-	if (count == 0)
-	{
-		msg.msg_control = NULL;
-		msg.msg_controllen = 0;
-	}
-	else
-	{
-		if ((cmptr = malloc(controllen)) == NULL)
-			return EOF;
-		cmptr->cmsg_level = SOL_SOCKET;
-		cmptr->cmsg_type = SCM_RIGHTS;
-		cmptr->cmsg_len = controllen;
-		msg.msg_control = (caddr_t) cmptr;
-		msg.msg_controllen = controllen;
-		/* the fd to pass */
-		memcpy(CMSG_DATA(cmptr), fds, count * sizeof(int));
-	}
-
-	if (sendmsg(Socket(*port), &msg, 0) != SEND_MSG_BUFFER_SIZE)
-	{
-		if (cmptr)
-			free(cmptr);
+	
+	if (count > 0  && ((cmptr = malloc(controllen)) == NULL))
 		return EOF;
-	}
+
+	do {
+		cur_count = count - sent_count;
+		if ((cur_count) > SEND_MAX_FD) {
+			cur_count = SEND_MAX_FD;
+		} else {
+			controllen = sizeof(struct cmsghdr) + cur_count * sizeof(int);
+		}
+
+ 		n32 = htonl((uint32) cur_count);
+		memcpy(buf + 5, &n32, 4);
+
+		if (cur_count == 0)
+		{
+			msg.msg_control = NULL;
+			msg.msg_controllen = 0;
+		}
+		else
+		{
+			cmptr->cmsg_level = SOL_SOCKET;
+			cmptr->cmsg_type = SCM_RIGHTS;
+			cmptr->cmsg_len = controllen;
+			msg.msg_control = (caddr_t) cmptr;
+			msg.msg_controllen = controllen;
+			/* the fd to pass */
+			memcpy(CMSG_DATA(cmptr), fds + sent_count, cur_count * sizeof(int));
+		}
+
+		if (sendmsg(Socket(*port), &msg, 0) != SEND_MSG_BUFFER_SIZE)
+		{
+			if (cmptr)
+				free(cmptr);
+
+			ereport(WARNING, (errcode_for_socket_access(),
+					errmsg("sendmsg() failed in pooler: %m")));
+			return EOF;
+		}
+
+		sent_count += cur_count;
+	} while (sent_count < count);
 
 	if (cmptr)
 		free(cmptr);
@@ -551,7 +572,8 @@ pool_recvfds(PoolPort *port, int *fds, int count)
 	char		buf[SEND_MSG_BUFFER_SIZE];
 	struct iovec iov[1];
 	struct msghdr msg;
-	int			controllen = sizeof(struct cmsghdr) + count * sizeof(int);
+	int			controllen = sizeof(struct cmsghdr) + SEND_MAX_FD * sizeof(int);
+	int 		recv_count = 0;
 	struct cmsghdr *cmptr = malloc(controllen);
 
 	if (cmptr == NULL)
@@ -566,73 +588,69 @@ pool_recvfds(PoolPort *port, int *fds, int count)
 	msg.msg_control = (caddr_t) cmptr;
 	msg.msg_controllen = controllen;
 
-	r = recvmsg(Socket(*port), &msg, 0);
-	if (r < 0)
-	{
+	do {
+		r = recvmsg(Socket(*port), &msg, 0);
+		if (r < 0)
+		{
+			/*
+		 	 * Report broken connection
+		 	 */
+			ereport(ERROR,
+					(errcode_for_socket_access(),
+				 	errmsg("could not receive data from client: %m")));
+			goto failure;
+		}
+		else if (r == 0)
+		{
+			goto failure;
+		}
+		else if (r != SEND_MSG_BUFFER_SIZE)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("incomplete message from client")));
+			goto failure;
+		}
+
+		/* Verify response */
+		if (buf[0] != 'f')
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 	errmsg("unexpected message code")));
+			goto failure;
+		}
+
+		memcpy(&n32, buf + 1, 4);
+		n32 = ntohl(n32);
+		if (n32 != 8)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 	errmsg("invalid message size")));
+			goto failure;
+		}
+
 		/*
-		 * Report broken connection
-		 */
-		ereport(ERROR,
-				(errcode_for_socket_access(),
-				 errmsg("could not receive data from client: %m")));
-		goto failure;
-	}
-	else if (r == 0)
-	{
-		goto failure;
-	}
-	else if (r != SEND_MSG_BUFFER_SIZE)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("incomplete message from client")));
-		goto failure;
-	}
+	 	 * If connection count is 0 it means pool does not have connections
+	 	 * to  fulfill request. Otherwise number of returned connections
+	 	 * should be equal to requested count. If it not the case consider this
+	 	 * a protocol violation. (Probably connection went out of sync)
+	 	 */
+		memcpy(&n32, buf + 5, 4);
+		n32 = ntohl(n32);
+		if (n32 == 0)
+		{
+			ereport(LOG,
+					(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
+				 	errmsg("failed to acquire connections")));
+			goto failure;
+		}
 
-	/* Verify response */
-	if (buf[0] != 'f')
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("unexpected message code")));
-		goto failure;
-	}
+		memcpy(fds + recv_count, CMSG_DATA(cmptr), n32 * sizeof(int));
+		recv_count += n32;
+	} while (recv_count < count);
 
-	memcpy(&n32, buf + 1, 4);
-	n32 = ntohl(n32);
-	if (n32 != 8)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("invalid message size")));
-		goto failure;
-	}
-
-	/*
-	 * If connection count is 0 it means pool does not have connections
-	 * to  fulfill request. Otherwise number of returned connections
-	 * should be equal to requested count. If it not the case consider this
-	 * a protocol violation. (Probably connection went out of sync)
-	 */
-	memcpy(&n32, buf + 5, 4);
-	n32 = ntohl(n32);
-	if (n32 == 0)
-	{
-		ereport(LOG,
-				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
-				 errmsg("failed to acquire connections")));
-		goto failure;
-	}
-
-	if (n32 != count)
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("unexpected connection count")));
-		goto failure;
-	}
-
-	memcpy(fds, CMSG_DATA(cmptr), count * sizeof(int));
 	free(cmptr);
 	return 0;
 failure:
